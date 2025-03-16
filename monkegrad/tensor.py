@@ -19,11 +19,18 @@ class MLP:
 
         self.inputs = np.random.uniform(0.0, 1.0, [1, input_dim])
         self.act = np.vectorize(act_fn)
+        #
         # aka weights
+        # layer[:-1] IS the output layer
         self.layers = []
         for i in range(len(layer_dims)):
             prev_dim = input_dim if i == 0 else layer_dims[i - 1]
             self.layers.append(np.random.uniform(0.0, 1.0, [prev_dim, layer_dims[i]]))
+
+        self.layer_grads = []
+        for i in range(len(layer_dims)):
+            prev_dim = input_dim if i == 0 else layer_dims[i - 1]
+            self.layer_grads.append(np.zeros([prev_dim, layer_dims[i]]))
 
     def __repr__(self):
         out = f"Multilayer perceptron:\nactivation fn: {self._act_fn}\n"
@@ -38,12 +45,22 @@ class MLP:
         output = self.inputs
         for layer in self.layers:
             output = self.act(np.matmul(output, layer))
+        return output
 
-        # will always be 1d
-        return output[0]
+    def bw(self):
+        for i, layer in enumerate(self.layer_grads[:-1]):
+            self.layer_grads[i] = np.zeros(layer.shape)
+        # output layer ones
+        self.layer_grads[-1] = np.ones(self.layer_grads[-1].shape)
+
+        for i, layer in enumerate(self.layer_grads):
+            print(i, self.layer_grads[i])
 
 
 if __name__ == "__main__":
-    xor_nn = MLP(2, [3, 1], tanh)
+    xor_nn = MLP(2, [2, 2], relu)
     print("\n" + str(xor_nn) + "\n")
+
     print(xor_nn.fw())
+    print("\n")
+    xor_nn.bw()
