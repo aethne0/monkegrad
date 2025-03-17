@@ -1,66 +1,142 @@
-import math
-from typing import List
+from enum import Enum, auto
+from math import tanh
+
 import numpy as np
 
-
-def relu(x):
-    return max(0, x)
-
-
-def tanh(x):
-    return (math.exp(2 * x) - 1) / (math.exp(2 * x) + 1)
+np.random.seed(sum([ord(ch) for ch in "monke"]))
+_DEBUG = False
 
 
-class MLP:
-    def __init__(self, input_dim: int, layer_dims: List[int], act_fn):
-        self._input_dim = input_dim
-        self._layer_dims = layer_dims
-        self._act_fn = act_fn
+class Op_Enum(Enum):
+    Matmul = auto()
+    Tanh = auto()
 
-        self.inputs = np.random.uniform(0.0, 1.0, [1, input_dim])
-        self.act = np.vectorize(act_fn)
-        #
-        # aka weights
-        # layer[:-1] IS the output layer
-        self.layers = []
-        for i in range(len(layer_dims)):
-            prev_dim = input_dim if i == 0 else layer_dims[i - 1]
-            self.layers.append(np.random.uniform(0.0, 1.0, [prev_dim, layer_dims[i]]))
 
-        self.layer_grads = []
-        for i in range(len(layer_dims)):
-            prev_dim = input_dim if i == 0 else layer_dims[i - 1]
-            self.layer_grads.append(np.zeros([prev_dim, layer_dims[i]]))
+class Op:
+    def __init__(self):
+        self.args = ()
+        self.arity = 0
+        self.out = 0.0
+        self.grad = 0.0
 
     def __repr__(self):
-        out = f"Multilayer perceptron:\nactivation fn: {self._act_fn}\n"
-        out += f"input (dim: {self._input_dim})\n"
-        out += str(self.inputs) + "\n"
-        for i, layer in enumerate(self.layers):
-            out += f"layer-{i} weights (dim: {self._layer_dims[i]}):\n"
-            out += str(layer) + "\n"
-        return out
+        return f"{type(self)}:(out={self.out:.2f}, grad={self.grad:.2f})"
+
+
+def Op_disp(op_or_nd, indent=0):
+    if type(op_or_nd) is not np.ndarray:
+        print(" " * indent * 4 + str(op_or_nd))
+        for i in op_or_nd.args:
+            Op_disp(i, indent + 1)
+    else:
+        print(" " * indent * 4 + "TENSOR:shape=" + str(op_or_nd.shape))
+
+
+class Tanh(Op):
+    def __init__(self, args):
+        super().__init__()
+        self.arity = 1
+        self.args = args
 
     def fw(self):
-        output = self.inputs
-        for layer in self.layers:
-            output = self.act(np.matmul(output, layer))
-        return output
+        self.out = np.vectorize(tanh)(self.args[0].out)
+
+    def bw(self, out):
+        self.grad = (np.vectorize(lambda x: 1 - tanh(x) ** 2)(out),)
+
+
+class Matmul(Op):
+    def __init__(self, args):
+        super().__init__()
+        self.arity = 2
+        self.args = args
+
+    def fw(self):
+        self.out = np.matmul(self.args[0].out, self.args[1].out)
 
     def bw(self):
-        for i, layer in enumerate(self.layer_grads[:-1]):
-            self.layer_grads[i] = np.zeros(layer.shape)
-        # output layer ones
-        self.layer_grads[-1] = np.ones(self.layer_grads[-1].shape)
+        self.grad = (self.args[1].transpose(), self.args[0].transpose)
 
-        for i, layer in enumerate(self.layer_grads):
-            print(i, self.layer_grads[i])
+
+ops_fw = {
+    Op_Enum.Matmul: np.matmul,
+    Op_Enum.Tanh: np.vectorize(tanh),
+}
+
+# do/dA ( A B ) = B.transpose
+# (allegedly)
+
+
+def fw_expr(expr):
+    if type(expr) is tuple:
+        if expr[0] == Op_Enum.Matmul:
+            return ops_fw[Op_Enum.Matmul](fw_expr(expr[1]), fw_expr(expr[2]))
+        elif expr[0] == Op_Enum.Tanh:
+            return ops_fw[Op_Enum.Tanh](fw_expr(expr[1]))
+        else:
+            raise RuntimeError("invalid op?")
+    else:
+        print(expr)
+        return expr
+
+
+def expr_str(expr, indent=0):
+    _spacing = 3
+    _in, _in2 = "|" + _spacing * " ", "|" + _spacing * "-"
+    if type(expr) is tuple:
+        out = f"{_in * (indent - 1) + (_in2 if indent > 0 else '')}{str(expr[0])}"
+        for e in expr[1:]:
+            out += f"\n{expr_str(e, indent + 1)}"
+    else:
+        out = f"{_in * (indent - 1) + (_in2 if indent > 0 else '')}TENSOR:shape={expr.shape}"
+    return out
+
+
+def print_stuff(inputs, layers):
+    print("Inputs:")
+    print(inputs, "\n")
+    for i, lay in enumerate(layers):
+        if i == len(layers) - 1:
+            print("output layer weights\n" + str(lay), "\n")
+        else:
+            print(f"hidden-layer-{i} weights\n" + str(lay), "\n")
 
 
 if __name__ == "__main__":
-    xor_nn = MLP(2, [2, 2], relu)
-    print("\n" + str(xor_nn) + "\n")
+    mlp = (2, (2, 1))
+    # inputs = np.random.uniform(0, 1, [1, mlp[0]])
+    inputs = np.array([[-0.25, 0.75]])
 
-    print(xor_nn.fw())
-    print("\n")
-    xor_nn.bw()
+    prev_layer = inputs
+    layers = []
+    for i in mlp[1]:
+        left_dim = prev_layer.shape[1]
+        layers.append(np.random.uniform(0, 1, [left_dim, i]))
+        prev_layer = layers[-1]
+
+    t_tanh = np.vectorize(lambda x: tanh(x))
+    t_tanh_r = np.vectorize(lambda x: 1 - tanh(x) ** 2)
+
+    # build expr
+    expr = inputs
+    for lay in layers:
+        expr = (Op_Enum.Tanh, (Op_Enum.Matmul, expr, lay))
+
+    if _DEBUG:
+        print("MLP with structure:", mlp, "\n")
+
+        print_stuff(inputs, layers)
+
+        print("expression tree:")
+        print(expr_str(expr))
+
+        print("\ninferance:")
+        print(fw_expr(expr))
+    print(expr_str(expr), "\n")
+
+    # build expr 2
+    expr_obj = inputs
+    for lay in layers:
+        expr_obj = Tanh((Matmul((expr_obj, lay)),))
+
+    Op_disp(expr_obj)
